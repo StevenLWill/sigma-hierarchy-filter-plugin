@@ -31,30 +31,44 @@ The plugin expects a CSV file with these columns:
 - `PARENT_ID`: ID of the parent term (empty for root terms)
 - `LEVEL`: Hierarchical level (0 for root, 1 for children, etc.)
 
+## Setup
+
+1. Install dependencies:
+```bash
+npm install
+# or
+yarn install
+```
+
+2. Data File Setup:
+- Create a directory: `public/data/`
+- Place your HPO data file as `bridge_hpo_parents.csv` in this directory
+- The CSV file should have the following columns:
+  - TERM_ID
+  - TERM_FULL_NAME
+  - PARENT_ID
+  - LEVEL
+  - _path_ids (optional)
+
 ## Development
 
-1. **Install dependencies**:
-   ```bash
-   npm install
-   ```
+```bash
+npm run dev
+# or
+yarn dev
+```
 
-2. **Place your CSV file**:
-   Put `bridge_hpo_parents.csv` in the `public/data/` folder
-
-3. **Start development server**:
-   ```bash
-   npm run dev
-   ```
-
-4. **Open**: `http://localhost:5173`
+The development server will start at `http://localhost:5173`.
 
 ## Building for Production
 
 ```bash
 npm run build
+# or
+yarn build
 ```
 
-This creates a `dist/` folder with the built plugin files.
+This will create a `dist` directory with the production build.
 
 ## Sigma Integration
 
@@ -74,6 +88,11 @@ To change the CSV file location, edit the `loadHPOData` function in `HPOPlugin.t
 ```typescript
 const response = await fetch('/data/bridge_hpo_parents.csv');
 ```
+
+The plugin can be configured through the `plugin.json` file:
+- `width`: Default 400px
+- `height`: Default 100%
+- Supported modes: "sidebar"
 
 ## Usage
 
