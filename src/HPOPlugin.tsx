@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useWorkbookVariables } from '@sigmacomputing/react-embed-sdk';
+import Papa from 'papaparse';
 
 // HPO Node interface
 interface HPONode {
@@ -9,6 +10,12 @@ interface HPONode {
   level: number;
   has_children: boolean;
 }
+
+// Helper to strip leading/trailing quotes
+const stripQuotes = (str: string | undefined | null): string => {
+  if (!str) return '';
+  return str.replace(/^"+|"+$/g, '').trim();
+};
 
 // Main HPO Plugin Component
 const HPOPlugin: React.FC = () => {
@@ -26,100 +33,109 @@ const HPOPlugin: React.FC = () => {
   // Sigma integration
   const { setVariables } = useWorkbookVariables(iframeRef as React.RefObject<HTMLIFrameElement>);
 
-  // Load HPO data from CSV
-  const loadHPOData = async () => {
+  const loadChunkedData = async () => {
     try {
-      setLoading(true);
-      setError(null);
+      console.log('Starting to load chunks...');
+      const chunks = [];
+      const chunkSuffixes = ['aa', 'ab', 'ac', 'ad', 'ae'];
 
-      // Fetch CSV data
-      const response = await fetch('/data/bridge_hpo_parents.csv');
-      const csvText = await response.text();
-      
-      // Parse CSV
-      const lines = csvText.trim().split('\n');
-      const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-      
-      const hpoNodes: HPONode[] = [];
-      const nodesMap = new Map<string, HPONode>();
-
-      // Parse data rows
-      for (let i = 1; i < lines.length; i++) {
-        const values = parseCSVLine(lines[i]);
-        const row: Record<string, string> = {};
-        
-        headers.forEach((header, index) => {
-          row[header] = values[index] || '';
-        });
-
-        const id = row.TERM_ID?.trim();
-        const name = row.TERM_FULL_NAME?.trim();
-        const parentId = row.PARENT_ID?.trim() || null;
-        const level = parseInt(row.LEVEL) || 0;
-
-        if (id && name) {
-          const node: HPONode = {
-            id,
-            name,
-            parent_id: parentId === '' ? null : parentId,
-            level,
-            has_children: false
-          };
-          
-          hpoNodes.push(node);
-          nodesMap.set(id, node);
+      for (const suffix of chunkSuffixes) {
+        try {
+          console.log(`Fetching chunk ${suffix}...`);
+          const response = await fetch(`/data/hpo_chunk_${suffix}`);
+          if (!response.ok) {
+            console.error(`Failed to load chunk ${suffix}`);
+            continue;
+          }
+          const text = await response.text();
+          console.log(`Loaded chunk ${suffix}, size: ${text.length} bytes`);
+          chunks.push(text);
+        } catch (error) {
+          console.error(`Error loading chunk ${suffix}:`, error);
+          continue;
         }
       }
 
-      // Calculate has_children
-      hpoNodes.forEach(node => {
-        if (node.parent_id && nodesMap.has(node.parent_id)) {
-          const parent = nodesMap.get(node.parent_id)!;
-          parent.has_children = true;
-        }
+      if (chunks.length === 0) {
+        throw new Error('No data chunks found');
+      }
+
+      console.log(`Combining ${chunks.length} chunks...`);
+      // Combine chunks, keeping header only from first chunk
+      const [firstChunk, ...restChunks] = chunks;
+      const combinedData = [
+        firstChunk,
+        ...restChunks.map(chunk => chunk.split('\n').slice(1).join('\n'))
+      ].join('\n');
+      console.log('Combined data size:', combinedData.length, 'bytes');
+
+      console.log('Parsing CSV data...');
+      // Parse the combined CSV data
+      const results = Papa.parse(combinedData, {
+        header: true,
+        skipEmptyLines: true,
+        transformHeader: (header: string): string => header.trim(),
       });
 
-      setNodes(hpoNodes);
-      setLoading(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load HPO data');
-      setLoading(false);
-    }
-  };
-
-  // Parse CSV line with proper quote handling
-  const parseCSVLine = (line: string): string[] => {
-    const values: string[] = [];
-    let current = '';
-    let inQuotes = false;
-    let bracketDepth = 0;
-    
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      
-      if (char === '"') {
-        inQuotes = !inQuotes;
-      } else if (char === '[' || char === '{') {
-        bracketDepth++;
-        current += char;
-      } else if (char === ']' || char === '}') {
-        bracketDepth--;
-        current += char;
-      } else if (char === ',' && !inQuotes && bracketDepth === 0) {
-        values.push(current.trim());
-        current = '';
-      } else {
-        current += char;
+      if (results.errors.length > 0) {
+        console.error('CSV parsing errors:', results.errors);
       }
+
+      console.log(`Parsed ${results.data.length} rows`);
+      return results.data;
+    } catch (error) {
+      console.error('Error loading chunked data:', error);
+      throw error;
     }
-    
-    values.push(current.trim());
-    return values;
   };
 
-  // Load data on mount
   useEffect(() => {
-    loadHPOData();
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        console.log('Starting data fetch...');
+        const data = await loadChunkedData();
+        
+        console.log('Processing nodes...');
+        // Process the data into nodes
+        const processedNodes = data
+          .filter((row: any) => row.TERM_ID && row.TERM_FULL_NAME && !row.TERM_ID.startsWith(']'))
+          .map((row: any): HPONode => ({
+            id: stripQuotes(row.TERM_ID),
+            name: stripQuotes(row.TERM_FULL_NAME),
+            parent_id: row.PARENT_ID ? stripQuotes(row.PARENT_ID) : null,
+            level: parseInt(row.LEVEL, 10),
+            has_children: false
+          }));
+
+        console.log(`Created ${processedNodes.length} nodes`);
+
+        // Calculate has_children
+        console.log('Calculating parent-child relationships...');
+        const nodesMap = new Map<string, HPONode>();
+        processedNodes.forEach(node => {
+          nodesMap.set(node.id, node);
+        });
+
+        processedNodes.forEach(node => {
+          if (node.parent_id && nodesMap.has(node.parent_id)) {
+            const parent = nodesMap.get(node.parent_id)!;
+            parent.has_children = true;
+          }
+        });
+
+        console.log('Setting nodes in state...');
+        setNodes(processedNodes);
+        console.log('Data loading complete!');
+        setLoading(false);
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        setError(error instanceof Error ? error.message : 'Failed to load HPO data');
+        setLoading(false);
+      }
+    };
+
+    fetchData();
   }, []);
 
   // Set iframe loaded when component mounts
@@ -243,43 +259,44 @@ const HPOPlugin: React.FC = () => {
     });
   };
 
-  // Get all descendants of a node
+  // Optimized getDescendants with Set and logging
   const getDescendants = (nodeId: string): string[] => {
     const descendants: string[] = [];
     const stack = [nodeId];
     const visited = new Set<string>();
-    
+
     while (stack.length > 0) {
       const currentId = stack.pop()!;
       if (visited.has(currentId)) continue;
-      
       visited.add(currentId);
-      descendants.push(currentId);
-      
+      if (currentId !== nodeId) descendants.push(currentId);
       const children = nodesByParent.get(currentId) || [];
-      children.forEach(child => {
+      for (const child of children) {
         if (!visited.has(child.id)) {
           stack.push(child.id);
         }
-      });
+      }
     }
-    
     return descendants;
   };
 
-  // Handle node selection
+  // Handle node selection with logging
   const handleNodeSelect = (node: HPONode, checked: boolean) => {
-    const newSelected = new Set(selectedNodes);
+    const t0 = performance.now();
     const descendants = getDescendants(node.id);
-    
+    console.log(`Toggling ${descendants.length} descendants for node ${node.id}`);
+    const newSelected = new Set(selectedNodes);
+
     if (checked) {
       descendants.forEach(id => newSelected.add(id));
+      newSelected.add(node.id);
     } else {
       descendants.forEach(id => newSelected.delete(id));
+      newSelected.delete(node.id);
     }
-    
+
     setSelectedNodes(newSelected);
-    
+
     // Update Sigma filter
     if (iframeLoaded) {
       const selectedTerms = Array.from(newSelected)
@@ -288,10 +305,12 @@ const HPOPlugin: React.FC = () => {
           return node ? `${node.id} - ${node.name}` : null;
         })
         .filter((term): term is string => term !== null);
-      
+
       const valueToSet = selectedTerms.length > 0 ? selectedTerms.join(',') : '';
       setVariables({ 'hpo-phenotype-filter': valueToSet });
     }
+    const t1 = performance.now();
+    console.log(`handleNodeSelect for ${node.id} took ${(t1 - t0).toFixed(2)} ms`);
   };
 
   // Check if node is selected
@@ -363,7 +382,47 @@ const HPOPlugin: React.FC = () => {
       <div style={{ padding: '20px', textAlign: 'center' }}>
         <div style={{ color: '#d32f2f', marginBottom: '10px' }}>Error: {error}</div>
         <button 
-          onClick={loadHPOData}
+          onClick={() => {
+            const fetchData = async () => {
+              try {
+                setLoading(true);
+                const data = await loadChunkedData();
+                
+                // Process the data into nodes
+                const processedNodes = data
+                  .filter((row: any) => row.TERM_ID && row.TERM_FULL_NAME && !row.TERM_ID.startsWith(']'))
+                  .map((row: any): HPONode => ({
+                    id: stripQuotes(row.TERM_ID),
+                    name: stripQuotes(row.TERM_FULL_NAME),
+                    parent_id: row.PARENT_ID ? stripQuotes(row.PARENT_ID) : null,
+                    level: parseInt(row.LEVEL, 10),
+                    has_children: false
+                  }));
+
+                // Calculate has_children
+                const nodesMap = new Map<string, HPONode>();
+                processedNodes.forEach(node => {
+                  nodesMap.set(node.id, node);
+                });
+
+                processedNodes.forEach(node => {
+                  if (node.parent_id && nodesMap.has(node.parent_id)) {
+                    const parent = nodesMap.get(node.parent_id)!;
+                    parent.has_children = true;
+                  }
+                });
+
+                setNodes(processedNodes);
+                setLoading(false);
+              } catch (error) {
+                console.error('Error fetching data:', error);
+                setError(error instanceof Error ? error.message : 'Failed to load HPO data');
+                setLoading(false);
+              }
+            };
+
+            fetchData();
+          }}
           style={{
             padding: '8px 16px',
             backgroundColor: '#2196f3',
