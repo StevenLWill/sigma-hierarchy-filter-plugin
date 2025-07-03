@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useVariable } from '@sigmacomputing/plugin';
+import { useWorkbookVariables } from '@sigmacomputing/react-embed-sdk';
 import Papa from 'papaparse';
 
 // HPO Node interface
@@ -41,25 +42,61 @@ const HPOPlugin: React.FC = () => {
   // Add variable existence check
   const [variableExists, setVariableExists] = useState(false);
   
+  // Add local development state
+  const [localSelectedNodes, setLocalSelectedNodes] = useState<Set<string>>(new Set());
+  const isLocalDev = process.env.NODE_ENV === 'development';
+
+  // Get access to Sigma workbook variables
+  const { getVariables, setVariables } = useWorkbookVariables(iframeRef as React.RefObject<HTMLIFrameElement>);
+
   // Two-way sync with Sigma control
   const [filterValue, setFilterValue] = useVariable('hpo-phenotype-filter') as [unknown, (value: string[]) => void];
 
-  // Check if variable exists on mount
+  // Check variable existence on mount
   useEffect(() => {
-    // If we can get the filterValue, the variable exists
-    if (filterValue !== undefined) {
-      setVariableExists(true);
-      addDebugLog('Variable exists in Sigma workbook');
-    } else {
-      setVariableExists(false);
-      addDebugLog('Variable does not exist in Sigma workbook - please create a List control named "hpo-phenotype-filter"');
+    const checkVariable = async () => {
+      try {
+        // Try to get all variables
+        const variables = await getVariables();
+        
+        // Log all available variables
+        addDebugLog('=== Available Sigma Variables ===');
+        if (variables && typeof variables === 'object') {
+          const variableNames = Object.keys(variables);
+          if (variableNames.length === 0) {
+            addDebugLog('No variables found in workbook');
+          } else {
+            addDebugLog('Found variables:');
+            variableNames.forEach(name => {
+              addDebugLog(`- ${name}`);
+            });
+          }
+        }
+        
+        // Check if our variable exists
+        if (variables && typeof variables === 'object' && 'hpo-phenotype-filter' in variables) {
+          setVariableExists(true);
+          addDebugLog('✓ hpo-phenotype-filter exists in workbook');
+        } else {
+          setVariableExists(false);
+          addDebugLog('✗ hpo-phenotype-filter not found in workbook');
+        }
+      } catch (error) {
+        addDebugLog('Error checking variables: ' + error);
+        setVariableExists(false);
+      }
+    };
+
+    if (!isLocalDev) {
+      checkVariable();
     }
-  }, [filterValue, addDebugLog]);
+  }, [isLocalDev, getVariables, addDebugLog]);
 
   // Enhanced debug logging
   useEffect(() => {
     const debugInfo = [
       '=== Variable Debug Info ===',
+      `Environment: ${isLocalDev ? 'Development' : 'Production'}`,
       `Variable name: hpo-phenotype-filter`,
       `Variable exists in workbook: ${variableExists}`,
       `filterValue type: ${typeof filterValue}`,
@@ -71,7 +108,7 @@ const HPOPlugin: React.FC = () => {
     ].join('\n');
     
     addDebugLog(debugInfo);
-  }, [filterValue, variableExists, addDebugLog]);
+  }, [filterValue, variableExists, isLocalDev, addDebugLog]);
 
   // Parse filterValue into a Set for selection logic
   const selectedNodes = useMemo(() => {
@@ -336,12 +373,7 @@ const HPOPlugin: React.FC = () => {
   };
 
   // Handle node selection with error handling
-  const handleNodeSelect = (node: HPONode, checked: boolean) => {
-    if (!variableExists) {
-      addDebugLog('ERROR: Cannot update selection - variable does not exist in Sigma workbook');
-      return;
-    }
-
+  const handleNodeSelect = async (node: HPONode, checked: boolean) => {
     const descendants = getDescendants(node.id);
     const newSelection = new Set(selectedNodes);
     
@@ -352,10 +384,25 @@ const HPOPlugin: React.FC = () => {
       newSelection.delete(node.id);
       descendants.forEach(id => newSelection.delete(id));
     }
+
+    // Handle local development
+    if (isLocalDev) {
+      setLocalSelectedNodes(newSelection);
+      addDebugLog(`Local dev: Updated selection with ${newSelection.size} items`);
+      return;
+    }
+    
+    // Handle Sigma integration
+    if (!variableExists) {
+      addDebugLog('ERROR: Cannot update selection - variable does not exist in Sigma workbook');
+      return;
+    }
     
     try {
-      // Update the Sigma variable with the new selection
-      setFilterValue(Array.from(newSelection));
+      const newValue = Array.from(newSelection);
+      // Try both methods to update the variable
+      setFilterValue(newValue);
+      await setVariables({ 'hpo-phenotype-filter': newValue.join(',') });
       addDebugLog(`Successfully updated selection with ${newSelection.size} items`);
     } catch (error) {
       addDebugLog(`ERROR: Failed to update selection - ${error}`);
