@@ -57,24 +57,43 @@ const HPOPlugin: React.FC = () => {
 
   // Set iframe loaded when component mounts
   useEffect(() => {
+    addDebugLog('Initializing iframe...');
     // Create a hidden iframe for Sigma communication
     const iframe = document.createElement('iframe');
     iframe.style.display = 'none';
+    // Set the src to the current origin to enable cross-frame communication
+    iframe.src = window.location.origin;
+    
+    // Add load event listener
+    iframe.onload = () => {
+      addDebugLog('Iframe loaded successfully');
+      setIsIframeReady(true);
+    };
+
+    iframe.onerror = (error) => {
+      addDebugLog('Error loading iframe: ' + error);
+    };
+
     document.body.appendChild(iframe);
     iframeRef.current = iframe;
-    setIsIframeReady(true);
 
     // Cleanup
     return () => {
+      addDebugLog('Cleaning up iframe');
       document.body.removeChild(iframe);
     };
-  }, []);
+  }, [addDebugLog]);
 
   // Check variable existence on mount
   useEffect(() => {
     const checkVariable = async () => {
       if (!isIframeReady) {
         addDebugLog('Waiting for iframe to be ready...');
+        return;
+      }
+
+      if (!iframeRef.current) {
+        addDebugLog('ERROR: iframe reference is null');
         return;
       }
 
@@ -85,7 +104,12 @@ const HPOPlugin: React.FC = () => {
         
         // Log all available variables
         addDebugLog('=== Available Sigma Variables ===');
-        if (variables && typeof variables === 'object') {
+        if (!variables) {
+          addDebugLog('No variables object returned');
+          return;
+        }
+
+        if (typeof variables === 'object') {
           const variableNames = Object.keys(variables);
           if (variableNames.length === 0) {
             addDebugLog('No variables found in workbook');
@@ -95,6 +119,8 @@ const HPOPlugin: React.FC = () => {
               addDebugLog(`- ${name}`);
             });
           }
+        } else {
+          addDebugLog(`Variables is not an object, got: ${typeof variables}`);
         }
         
         // Check if our variable exists
