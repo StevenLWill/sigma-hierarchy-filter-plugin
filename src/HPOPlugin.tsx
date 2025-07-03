@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useWorkbookVariables } from '@sigmacomputing/react-embed-sdk';
 import { useVariable } from '@sigmacomputing/plugin';
 import Papa from 'papaparse';
 
@@ -30,19 +29,21 @@ const HPOPlugin: React.FC = () => {
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const searchTimeoutRef = useRef<number | undefined>(undefined);
 
-  // Sigma integration
-  const { setVariables } = useWorkbookVariables(iframeRef as React.RefObject<HTMLIFrameElement>);
-
   // Two-way sync with Sigma control
-  const [filterValue, setFilterValue] = useVariable('hpo-phenotype-filter') as [string[] | string | undefined, (value: string[] | string | undefined) => void];
+  const [filterValue, setFilterValue] = useVariable('hpo-phenotype-filter') as [unknown, (value: string[]) => void];
+
+  // Add debug logging
+  useEffect(() => {
+    console.log('Current filterValue:', filterValue);
+  }, [filterValue]);
 
   // Parse filterValue into a Set for selection logic
   const selectedNodes = useMemo(() => {
     if (!filterValue) return new Set<string>();
-    if (Array.isArray(filterValue)) return new Set(filterValue);
+    if (Array.isArray(filterValue)) return new Set(filterValue as string[]);
     if (typeof filterValue === 'string') {
       return new Set(
-        filterValue
+        (filterValue as string)
           .split(',')
           .map((s: string) => s.trim())
           .filter(Boolean)
@@ -300,23 +301,19 @@ const HPOPlugin: React.FC = () => {
 
   // Handle node selection with logging and two-way sync
   const handleNodeSelect = (node: HPONode, checked: boolean) => {
-    const t0 = performance.now();
     const descendants = getDescendants(node.id);
-    console.log(`Toggling ${descendants.length} descendants for node ${node.id}`);
-    const newSelected = new Set(selectedNodes);
-
+    const newSelection = new Set(selectedNodes);
+    
     if (checked) {
-      descendants.forEach(id => newSelected.add(id));
-      newSelected.add(node.id);
+      newSelection.add(node.id);
+      descendants.forEach(id => newSelection.add(id));
     } else {
-      descendants.forEach(id => newSelected.delete(id));
-      newSelected.delete(node.id);
+      newSelection.delete(node.id);
+      descendants.forEach(id => newSelection.delete(id));
     }
-
-    // Update Sigma control value (two-way sync)
-    setFilterValue(Array.from(newSelected));
-    const t1 = performance.now();
-    console.log(`handleNodeSelect for ${node.id} took ${(t1 - t0).toFixed(2)} ms`);
+    
+    // Update the Sigma variable with the new selection
+    setFilterValue(Array.from(newSelection));
   };
 
   // Check if node is selected
