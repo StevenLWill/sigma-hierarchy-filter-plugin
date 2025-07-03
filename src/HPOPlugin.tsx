@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useWorkbookVariables } from '@sigmacomputing/react-embed-sdk';
+import { useVariable } from '@sigmacomputing/plugin';
 import Papa from 'papaparse';
 
 // HPO Node interface
@@ -24,7 +25,6 @@ const HPOPlugin: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
-  const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [iframeLoaded, setIframeLoaded] = useState(false);
@@ -32,6 +32,19 @@ const HPOPlugin: React.FC = () => {
 
   // Sigma integration
   const { setVariables } = useWorkbookVariables(iframeRef as React.RefObject<HTMLIFrameElement>);
+
+  // Two-way sync with Sigma control
+  const [filterValue, setFilterValue] = useVariable('hpo-phenotype-filter');
+
+  // Parse filterValue into a Set for selection logic
+  const selectedNodes = useMemo(() => {
+    if (!filterValue) return new Set<string>();
+    if (Array.isArray(filterValue)) return new Set(filterValue);
+    if (typeof filterValue === 'string') {
+      return new Set(filterValue.split(',').map((s) => s.trim()).filter(Boolean));
+    }
+    return new Set<string>();
+  }, [filterValue]);
 
   const loadChunkedData = async () => {
     try {
@@ -280,7 +293,7 @@ const HPOPlugin: React.FC = () => {
     return descendants;
   };
 
-  // Handle node selection with logging
+  // Handle node selection with logging and two-way sync
   const handleNodeSelect = (node: HPONode, checked: boolean) => {
     const t0 = performance.now();
     const descendants = getDescendants(node.id);
@@ -295,20 +308,8 @@ const HPOPlugin: React.FC = () => {
       newSelected.delete(node.id);
     }
 
-    setSelectedNodes(newSelected);
-
-    // Update Sigma filter
-    if (iframeLoaded) {
-      const selectedTerms = Array.from(newSelected)
-        .map(id => {
-          const node = nodes.find(n => n.id === id);
-          return node ? `${node.id} - ${node.name}` : null;
-        })
-        .filter((term): term is string => term !== null);
-
-      const valueToSet = selectedTerms.length > 0 ? selectedTerms.join(',') : '';
-      setVariables({ 'hpo-phenotype-filter': valueToSet });
-    }
+    // Update Sigma control value (two-way sync)
+    setFilterValue(Array.from(newSelected));
     const t1 = performance.now();
     console.log(`handleNodeSelect for ${node.id} took ${(t1 - t0).toFixed(2)} ms`);
   };
