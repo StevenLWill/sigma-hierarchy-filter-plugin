@@ -34,14 +34,19 @@ const HPOPlugin: React.FC = () => {
   const { setVariables } = useWorkbookVariables(iframeRef as React.RefObject<HTMLIFrameElement>);
 
   // Two-way sync with Sigma control
-  const [filterValue, setFilterValue] = useVariable('hpo-phenotype-filter');
+  const [filterValue, setFilterValue] = useVariable('hpo-phenotype-filter') as [string[] | string | undefined, (value: string[] | string | undefined) => void];
 
   // Parse filterValue into a Set for selection logic
   const selectedNodes = useMemo(() => {
     if (!filterValue) return new Set<string>();
     if (Array.isArray(filterValue)) return new Set(filterValue);
     if (typeof filterValue === 'string') {
-      return new Set(filterValue.split(',').map((s) => s.trim()).filter(Boolean));
+      return new Set(
+        filterValue
+          .split(',')
+          .map((s: string) => s.trim())
+          .filter(Boolean)
+      );
     }
     return new Set<string>();
   }, [filterValue]);
