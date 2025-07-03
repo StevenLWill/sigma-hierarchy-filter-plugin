@@ -52,10 +52,34 @@ const HPOPlugin: React.FC = () => {
   // Two-way sync with Sigma control
   const [filterValue, setFilterValue] = useVariable('hpo-phenotype-filter') as [unknown, (value: string[]) => void];
 
+  // Add iframe ready state
+  const [isIframeReady, setIsIframeReady] = useState(false);
+
+  // Set iframe loaded when component mounts
+  useEffect(() => {
+    // Create a hidden iframe for Sigma communication
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+    iframeRef.current = iframe;
+    setIsIframeReady(true);
+
+    // Cleanup
+    return () => {
+      document.body.removeChild(iframe);
+    };
+  }, []);
+
   // Check variable existence on mount
   useEffect(() => {
     const checkVariable = async () => {
+      if (!isIframeReady) {
+        addDebugLog('Waiting for iframe to be ready...');
+        return;
+      }
+
       try {
+        addDebugLog('Checking for variables...');
         // Try to get all variables
         const variables = await getVariables();
         
@@ -90,13 +114,14 @@ const HPOPlugin: React.FC = () => {
     if (!isLocalDev) {
       checkVariable();
     }
-  }, [isLocalDev, getVariables, addDebugLog]);
+  }, [isLocalDev, isIframeReady, getVariables, addDebugLog]);
 
   // Enhanced debug logging
   useEffect(() => {
     const debugInfo = [
       '=== Variable Debug Info ===',
       `Environment: ${isLocalDev ? 'Development' : 'Production'}`,
+      `Iframe Ready: ${isIframeReady}`,
       `Variable name: hpo-phenotype-filter`,
       `Variable exists in workbook: ${variableExists}`,
       `filterValue type: ${typeof filterValue}`,
@@ -108,7 +133,7 @@ const HPOPlugin: React.FC = () => {
     ].join('\n');
     
     addDebugLog(debugInfo);
-  }, [filterValue, variableExists, isLocalDev, addDebugLog]);
+  }, [filterValue, variableExists, isLocalDev, isIframeReady, addDebugLog]);
 
   // Parse filterValue into a Set for selection logic
   const selectedNodes = useMemo(() => {
