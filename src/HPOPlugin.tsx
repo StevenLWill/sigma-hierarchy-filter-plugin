@@ -29,13 +29,49 @@ const HPOPlugin: React.FC = () => {
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const searchTimeoutRef = useRef<number | undefined>(undefined);
 
+  // Add debug state
+  const [showDebug, setShowDebug] = useState(true);
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+
+  // Add debug logging function
+  const addDebugLog = useCallback((message: string) => {
+    setDebugLogs(prev => [...prev.slice(-9), message]); // Keep last 10 logs
+  }, []);
+
+  // Add variable existence check
+  const [variableExists, setVariableExists] = useState(false);
+  
   // Two-way sync with Sigma control
   const [filterValue, setFilterValue] = useVariable('hpo-phenotype-filter') as [unknown, (value: string[]) => void];
 
-  // Add debug logging
+  // Check if variable exists on mount
   useEffect(() => {
-    console.log('Current filterValue:', filterValue);
-  }, [filterValue]);
+    // If we can get the filterValue, the variable exists
+    if (filterValue !== undefined) {
+      setVariableExists(true);
+      addDebugLog('Variable exists in Sigma workbook');
+    } else {
+      setVariableExists(false);
+      addDebugLog('Variable does not exist in Sigma workbook - please create a List control named "hpo-phenotype-filter"');
+    }
+  }, [filterValue, addDebugLog]);
+
+  // Enhanced debug logging
+  useEffect(() => {
+    const debugInfo = [
+      '=== Variable Debug Info ===',
+      `Variable name: hpo-phenotype-filter`,
+      `Variable exists in workbook: ${variableExists}`,
+      `filterValue type: ${typeof filterValue}`,
+      `filterValue value: ${JSON.stringify(filterValue)}`,
+      `Is array? ${Array.isArray(filterValue)}`,
+      `Is null? ${filterValue === null}`,
+      `Is undefined? ${filterValue === undefined}`,
+      '========================'
+    ].join('\n');
+    
+    addDebugLog(debugInfo);
+  }, [filterValue, variableExists, addDebugLog]);
 
   // Parse filterValue into a Set for selection logic
   const selectedNodes = useMemo(() => {
@@ -299,8 +335,13 @@ const HPOPlugin: React.FC = () => {
     return descendants;
   };
 
-  // Handle node selection with logging and two-way sync
+  // Handle node selection with error handling
   const handleNodeSelect = (node: HPONode, checked: boolean) => {
+    if (!variableExists) {
+      addDebugLog('ERROR: Cannot update selection - variable does not exist in Sigma workbook');
+      return;
+    }
+
     const descendants = getDescendants(node.id);
     const newSelection = new Set(selectedNodes);
     
@@ -312,8 +353,13 @@ const HPOPlugin: React.FC = () => {
       descendants.forEach(id => newSelection.delete(id));
     }
     
-    // Update the Sigma variable with the new selection
-    setFilterValue(Array.from(newSelection));
+    try {
+      // Update the Sigma variable with the new selection
+      setFilterValue(Array.from(newSelection));
+      addDebugLog(`Successfully updated selection with ${newSelection.size} items`);
+    } catch (error) {
+      addDebugLog(`ERROR: Failed to update selection - ${error}`);
+    }
   };
 
   // Check if node is selected
@@ -442,152 +488,177 @@ const HPOPlugin: React.FC = () => {
   }
 
   return (
-    <div style={{ 
-      padding: '20px', 
-      backgroundColor: '#f8f9fa',
-      border: '1px solid #ddd',
-      borderRadius: '8px',
-      fontFamily: 'system-ui, -apple-system, sans-serif'
-    }}>
-      {/* Header */}
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center',
-        marginBottom: '15px'
-      }}>
-        <h3 style={{ margin: 0, color: '#1976d2', fontSize: '16px' }}>
-          🧬 HPO Phenotype Ontology
-        </h3>
-        <div style={{ fontSize: '12px', color: '#666' }}>
-          {selectedNodes.size} selected
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* Variable Warning */}
+      {!variableExists && (
+        <div style={{
+          backgroundColor: '#fff3cd',
+          color: '#856404',
+          padding: '12px',
+          margin: '10px',
+          borderRadius: '4px',
+          fontSize: '14px',
+          border: '1px solid #ffeeba'
+        }}>
+          Please create a List control named "hpo-phenotype-filter" in your Sigma workbook to enable selection syncing.
         </div>
-      </div>
+      )}
 
-      {/* Search */}
-      <div style={{ marginBottom: '15px', position: 'relative' }}>
+      {/* Debug Panel */}
+      {showDebug && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          right: 0,
+          width: '300px',
+          maxHeight: '200px',
+          backgroundColor: 'rgba(0, 0, 0, 0.8)',
+          color: 'white',
+          padding: '10px',
+          fontSize: '12px',
+          fontFamily: 'monospace',
+          overflowY: 'auto',
+          zIndex: 1000,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+            <span>Debug Panel</span>
+            <button 
+              onClick={() => setShowDebug(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'white',
+                cursor: 'pointer',
+              }}
+            >
+              ×
+            </button>
+          </div>
+          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+            {debugLogs.join('\n\n')}
+          </pre>
+        </div>
+      )}
+
+      {/* Toggle Debug Button */}
+      {!showDebug && (
+        <button
+          onClick={() => setShowDebug(true)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            right: 0,
+            padding: '5px',
+            background: 'rgba(0, 0, 0, 0.8)',
+            color: 'white',
+            border: 'none',
+            cursor: 'pointer',
+            zIndex: 1000,
+          }}
+        >
+          Show Debug
+        </button>
+      )}
+
+      {/* Existing UI components */}
+      <div style={{ padding: '10px' }}>
         <input
           type="text"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          onKeyDown={(e) => e.stopPropagation()}
           placeholder="Search phenotype terms..."
           style={{
             width: '100%',
-            padding: '8px 12px',
-            paddingLeft: '32px',
-            fontSize: '14px',
-            border: '1px solid #ddd',
+            padding: '8px',
+            marginBottom: '10px',
+            border: '1px solid #ccc',
             borderRadius: '4px',
-            outline: 'none',
-            boxSizing: 'border-box',
-            backgroundColor: 'white'
           }}
         />
-        <span style={{
-          position: 'absolute',
-          left: '10px',
-          top: '50%',
-          transform: 'translateY(-50%)',
-          color: '#666',
-          fontSize: '14px',
-          pointerEvents: 'none'
-        }}>
-          🔍
-        </span>
       </div>
 
-      {/* Tree */}
-      <div style={{ 
-        height: '400px',
-        border: '1px solid #ddd', 
-        borderRadius: '4px',
-        backgroundColor: 'white',
-        overflow: 'auto'
-      }}>
-        {visibleNodes.map(node => (
-          <div
-            key={node.id}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              paddingLeft: `${node.level * 20}px`,
-              paddingRight: '8px',
-              paddingTop: '4px',
-              paddingBottom: '4px',
-              backgroundColor: isNodeSelected(node.id)
-                ? '#e3f2fd'
-                : isNodePartiallySelected(node.id)
-                  ? '#f0f7ff'
-                  : 'transparent',
-              borderRadius: '2px',
-              fontSize: '13px',
-              lineHeight: '1.3'
-            }}
-          >
-            {/* Expand/Collapse Button */}
-            <button
-              onClick={() => toggleExpansion(node.id)}
-              disabled={!node.has_children}
-              style={{
-                width: '16px',
-                height: '16px',
-                border: 'none',
-                background: 'transparent',
-                cursor: node.has_children ? 'pointer' : 'default',
-                fontSize: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginRight: '4px',
-                color: node.has_children ? '#666' : 'transparent'
-              }}
-            >
-              {node.has_children ? (expandedNodes.has(node.id) ? '▼' : '▶') : ''}
-            </button>
-            
-            {/* Checkbox */}
-            <input
-              type="checkbox"
-              checked={isNodeSelected(node.id)}
-              ref={input => {
-                if (input) input.indeterminate = isNodePartiallySelected(node.id);
-              }}
-              onChange={(e) => handleNodeSelect(node, e.target.checked)}
-              style={{
-                marginRight: '8px',
-                cursor: 'pointer',
-                accentColor: isNodeSelected(node.id) ? '#2196f3' : undefined
-              }}
-            />
-            
-            {/* Node Label */}
-            <span style={{
-              fontFamily: 'monospace',
-              color: '#333',
-              cursor: node.has_children ? 'pointer' : 'default',
-              flex: 1,
-              userSelect: 'none',
-              display: 'flex',
-              alignItems: 'center'
-            }}
-            onClick={() => node.has_children && toggleExpansion(node.id)}
-            >
-              <span style={{ opacity: 0.7 }}>{node.id}</span>
-              <span style={{ margin: '0 4px' }}>-</span>
-              <span>{highlightText(node.name, debouncedSearchTerm)}</span>
-            </span>
-          </div>
-        ))}
-        
-        {visibleNodes.length === 0 && (
-          <div style={{ 
-            padding: '20px', 
-            textAlign: 'center', 
-            color: '#666',
-            fontSize: '14px'
-          }}>
-            {searchTerm ? 'No matching phenotype terms found' : 'No phenotype terms available'}
+      {/* Rest of your existing UI */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0 10px' }}>
+        {loading ? (
+          <div>Loading...</div>
+        ) : error ? (
+          <div style={{ color: 'red' }}>{error}</div>
+        ) : (
+          <div>
+            {visibleNodes.map((node) => (
+              <div
+                key={node.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  paddingLeft: `${node.level * 20}px`,
+                  paddingRight: '8px',
+                  paddingTop: '4px',
+                  paddingBottom: '4px',
+                  backgroundColor: isNodeSelected(node.id)
+                    ? '#e3f2fd'
+                    : isNodePartiallySelected(node.id)
+                      ? '#f0f7ff'
+                      : 'transparent',
+                  borderRadius: '2px',
+                  fontSize: '13px',
+                  lineHeight: '1.3'
+                }}
+              >
+                {/* Expand/Collapse Button */}
+                <button
+                  onClick={() => toggleExpansion(node.id)}
+                  disabled={!node.has_children}
+                  style={{
+                    width: '16px',
+                    height: '16px',
+                    border: 'none',
+                    background: 'transparent',
+                    cursor: node.has_children ? 'pointer' : 'default',
+                    fontSize: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginRight: '4px',
+                    color: node.has_children ? '#666' : 'transparent'
+                  }}
+                >
+                  {node.has_children ? (expandedNodes.has(node.id) ? '▼' : '▶') : ''}
+                </button>
+                
+                {/* Checkbox */}
+                <input
+                  type="checkbox"
+                  checked={isNodeSelected(node.id)}
+                  ref={input => {
+                    if (input) input.indeterminate = isNodePartiallySelected(node.id);
+                  }}
+                  onChange={(e) => handleNodeSelect(node, e.target.checked)}
+                  style={{
+                    marginRight: '8px',
+                    cursor: 'pointer',
+                    accentColor: isNodeSelected(node.id) ? '#2196f3' : undefined
+                  }}
+                />
+                
+                {/* Node Label */}
+                <span style={{
+                  fontFamily: 'monospace',
+                  color: '#333',
+                  cursor: node.has_children ? 'pointer' : 'default',
+                  flex: 1,
+                  userSelect: 'none',
+                  display: 'flex',
+                  alignItems: 'center'
+                }}
+                onClick={() => node.has_children && toggleExpansion(node.id)}
+                >
+                  <span style={{ opacity: 0.7 }}>{node.id}</span>
+                  <span style={{ margin: '0 4px' }}>-</span>
+                  <span>{highlightText(node.name, debouncedSearchTerm)}</span>
+                </span>
+              </div>
+            ))}
           </div>
         )}
       </div>
