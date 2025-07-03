@@ -102,6 +102,10 @@ const HPOPlugin: React.FC = () => {
         // Try to get all variables
         const variables = await getVariables();
         
+        // Log raw variables response
+        addDebugLog('Raw variables response:');
+        addDebugLog(JSON.stringify(variables, null, 2));
+        
         // Log all available variables
         addDebugLog('=== Available Sigma Variables ===');
         if (!variables) {
@@ -114,7 +118,7 @@ const HPOPlugin: React.FC = () => {
           if (variableNames.length === 0) {
             addDebugLog('No variables found in workbook');
           } else {
-            addDebugLog('Found variables:');
+            addDebugLog(`Found ${variableNames.length} variables:`);
             variableNames.forEach(name => {
               addDebugLog(`- ${name}`);
             });
@@ -130,6 +134,7 @@ const HPOPlugin: React.FC = () => {
         } else {
           setVariableExists(false);
           addDebugLog('✗ hpo-phenotype-filter not found in workbook');
+          addDebugLog('Make sure you have created a List control with ID "hpo-phenotype-filter"');
         }
       } catch (error) {
         addDebugLog('Error checking variables: ' + error);
