@@ -1,0 +1,16 @@
+{
+  "name": "HPO Phenotype Hierarchy",
+  "description": "Filter for HPO phenotype terms using a hierarchical tree structure",
+  "version": "1.0.0",
+  "url": "http://localhost:5173/index.html",
+  "icon": "http://localhost:5173/icon.png",
+  "supportedModes": ["sidebar"],
+  "externalAssets": [
+    "http://localhost:5173/assets/index.js",
+    "http://localhost:5173/assets/vendor.js"
+  ],
+  "config": {
+    "width": 400,
+    "height": "100%"
+  }
+} 
