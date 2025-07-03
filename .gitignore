@@ -6,6 +6,9 @@
 # Production
 /dist
 
+# Data files
+public/data/bridge_hpo_parents.csv
+
 # Misc
 .DS_Store
 .env.local
