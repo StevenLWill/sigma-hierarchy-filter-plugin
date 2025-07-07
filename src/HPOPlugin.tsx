@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useWorkbookVariables } from '@sigmacomputing/react-embed-sdk';
+import { useVariable } from '@sigmacomputing/plugin';
 import Papa from 'papaparse';
 
 // HPO Node interface
@@ -29,6 +30,9 @@ const HPOPlugin: React.FC = () => {
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const searchTimeoutRef = useRef<number | undefined>(undefined);
+
+  // Get the filter value from Sigma
+  const [sigmaValue, setSigmaValue] = useVariable('hpo-phenotype-filter');
 
   // Sigma integration
   const { setVariables } = useWorkbookVariables(iframeRef as React.RefObject<HTMLIFrameElement>);
@@ -363,6 +367,20 @@ const HPOPlugin: React.FC = () => {
       ) : part
     );
   };
+
+  // Update Sigma when selection changes
+  useEffect(() => {
+    // Convert selected nodes to array and update Sigma
+    const selectedTerms = Array.from(selectedNodes)
+      .map(id => {
+        const node = nodes.find(n => n.id === id);
+        return node ? `${node.id} - ${node.name}` : null;
+      })
+      .filter((term): term is string => term !== null);
+
+    console.log('Updating Sigma with selected terms:', selectedTerms);
+    setSigmaValue(JSON.stringify(selectedTerms));
+  }, [selectedNodes, nodes]);
 
   // Loading state
   if (loading) {
