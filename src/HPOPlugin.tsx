@@ -18,18 +18,79 @@ const stripQuotes = (str: string | undefined | null): string => {
   return str.replace(/^"+|"+$/g, '').trim();
 };
 
+// Storage key generation and management
+const generateStorageKey = (prefix: string, sessionId?: string, workbookId?: string): string => {
+  // Use URL pathname as session identifier if available, otherwise use a default
+  const session = sessionId || window.location.pathname || 'default-session';
+  const workbook = workbookId || 'default-workbook';
+  
+  // Create a more unique identifier by combining multiple factors
+  const uniqueId = `${session}-${workbook}-${window.location.hostname || 'localhost'}`;
+  
+  return `sigma-hpo-plugin-${prefix}-${uniqueId}`;
+};
+
+const saveToStorage = (key: string, data: any): void => {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (error) {
+    console.warn('Failed to save to localStorage:', error);
+  }
+};
+
+const loadFromStorage = (key: string, defaultValue: any): any => {
+  try {
+    const stored = localStorage.getItem(key);
+    return stored ? JSON.parse(stored) : defaultValue;
+  } catch (error) {
+    console.warn('Failed to load from localStorage:', error);
+    return defaultValue;
+  }
+};
+
+// Cleanup old storage entries (keep only last 10 sessions/workbooks)
+const cleanupOldStorage = (): void => {
+  try {
+    const keys = Object.keys(localStorage).filter(key => key.startsWith('sigma-hpo-plugin-'));
+    if (keys.length > 20) { // 10 sessions * 2 storage keys each
+      // Sort by creation time (approximate) and remove oldest
+      const sortedKeys = keys.sort();
+      const keysToRemove = sortedKeys.slice(0, keys.length - 20);
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+    }
+  } catch (error) {
+    console.warn('Failed to cleanup old storage:', error);
+  }
+};
+
 // Main HPO Plugin Component
 const HPOPlugin: React.FC = () => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [nodes, setNodes] = useState<HPONode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
-  const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const searchTimeoutRef = useRef<number | undefined>(undefined);
+
+  // Generate storage keys for this session/workbook
+  const selectedNodesKey = useMemo(() => generateStorageKey('selected'), []);
+  const expandedNodesKey = useMemo(() => generateStorageKey('expanded'), []);
+  
+  // Track if we have persisted data
+  const [hasPersistedData, setHasPersistedData] = useState(false);
+
+  // Initialize state with persisted values
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(() => {
+    const saved = loadFromStorage(expandedNodesKey, []);
+    return new Set(saved);
+  });
+  
+  const [selectedNodes, setSelectedNodes] = useState<Set<string>>(() => {
+    const saved = loadFromStorage(selectedNodesKey, []);
+    return new Set(saved);
+  });
 
   // Get the filter value from Sigma
   const [sigmaValue, setSigmaValue] = useVariable('hpo-phenotype-filter');
@@ -145,7 +206,36 @@ const HPOPlugin: React.FC = () => {
   // Set iframe loaded when component mounts
   useEffect(() => {
     setIframeLoaded(true);
+    // Cleanup old storage entries on mount
+    cleanupOldStorage();
   }, []);
+
+  // Persist expandedNodes changes
+  useEffect(() => {
+    saveToStorage(expandedNodesKey, Array.from(expandedNodes));
+  }, [expandedNodes, expandedNodesKey]);
+
+  // Persist selectedNodes changes
+  useEffect(() => {
+    saveToStorage(selectedNodesKey, Array.from(selectedNodes));
+  }, [selectedNodes, selectedNodesKey]);
+
+  // Check if we have persisted data on mount
+  useEffect(() => {
+    const hasSelected = loadFromStorage(selectedNodesKey, []).length > 0;
+    const hasExpanded = loadFromStorage(expandedNodesKey, []).length > 0;
+    setHasPersistedData(hasSelected || hasExpanded);
+  }, [selectedNodesKey, expandedNodesKey]);
+
+  // Clear all selections function
+  const clearAllSelections = useCallback(() => {
+    setSelectedNodes(new Set());
+    setExpandedNodes(new Set());
+    setHasPersistedData(false);
+    // Also clear from storage
+    localStorage.removeItem(selectedNodesKey);
+    localStorage.removeItem(expandedNodesKey);
+  }, [selectedNodesKey, expandedNodesKey]);
 
   // Create parent-child relationships
   const nodesByParent = useMemo(() => {
@@ -251,7 +341,7 @@ const HPOPlugin: React.FC = () => {
   }, [nodes, expandedNodes, nodesByParent, debouncedSearchTerm, nodesById]);
 
   // Toggle node expansion
-  const toggleExpansion = (nodeId: string) => {
+  const toggleExpansion = useCallback((nodeId: string) => {
     setExpandedNodes(prev => {
       const next = new Set(prev);
       if (next.has(nodeId)) {
@@ -261,10 +351,10 @@ const HPOPlugin: React.FC = () => {
       }
       return next;
     });
-  };
+  }, []);
 
   // Optimized getDescendants with Set and logging
-  const getDescendants = (nodeId: string): string[] => {
+  const getDescendants = useCallback((nodeId: string): string[] => {
     const descendants: string[] = [];
     const stack = [nodeId];
     const visited = new Set<string>();
@@ -282,19 +372,40 @@ const HPOPlugin: React.FC = () => {
       }
     }
     return descendants;
-  };
+  }, [nodesByParent]);
+
+  // Check if node is selected
+  const isNodeSelected = useCallback((nodeId: string): boolean => {
+    return selectedNodes.has(nodeId);
+  }, [selectedNodes]);
+
+  // Check if node is partially selected
+  const isNodePartiallySelected = useCallback((nodeId: string): boolean => {
+    const descendants = getDescendants(nodeId);
+    const selectedDescendants = descendants.filter(id => selectedNodes.has(id));
+    return selectedDescendants.length > 0 && selectedDescendants.length < descendants.length;
+  }, [selectedNodes, getDescendants]);
 
   // Handle node selection with logging
-  const handleNodeSelect = (node: HPONode, checked: boolean) => {
+  const handleNodeSelect = useCallback((node: HPONode, checked: boolean) => {
     const t0 = performance.now();
     const descendants = getDescendants(node.id);
-    console.log(`Toggling ${descendants.length} descendants for node ${node.id}`);
+    const isPartiallySelected = isNodePartiallySelected(node.id);
+    const isFullySelected = isNodeSelected(node.id);
+    
+    console.log(`Toggling ${descendants.length} descendants for node ${node.id}, partially selected: ${isPartiallySelected}, fully selected: ${isFullySelected}`);
     const newSelected = new Set(selectedNodes);
 
-    if (checked) {
+    // If the node is partially selected (indeterminate state), unselect everything
+    if (isPartiallySelected) {
+      descendants.forEach(id => newSelected.delete(id));
+      newSelected.delete(node.id);
+    } else if (checked) {
+      // Normal behavior: select node and all descendants
       descendants.forEach(id => newSelected.add(id));
       newSelected.add(node.id);
     } else {
+      // Normal behavior: unselect node and all descendants
       descendants.forEach(id => newSelected.delete(id));
       newSelected.delete(node.id);
     }
@@ -315,19 +426,7 @@ const HPOPlugin: React.FC = () => {
     }
     const t1 = performance.now();
     console.log(`handleNodeSelect for ${node.id} took ${(t1 - t0).toFixed(2)} ms`);
-  };
-
-  // Check if node is selected
-  const isNodeSelected = (nodeId: string): boolean => {
-    return selectedNodes.has(nodeId);
-  };
-
-  // Check if node is partially selected
-  const isNodePartiallySelected = (nodeId: string): boolean => {
-    const descendants = getDescendants(nodeId);
-    const selectedDescendants = descendants.filter(id => selectedNodes.has(id));
-    return selectedDescendants.length > 0 && selectedDescendants.length < descendants.length;
-  };
+  }, [selectedNodes, getDescendants, iframeLoaded, nodes, setVariables, isNodePartiallySelected, isNodeSelected]);
 
   // Auto-expand nodes when searching
   useEffect(() => {
@@ -474,8 +573,32 @@ const HPOPlugin: React.FC = () => {
         <h3 style={{ margin: 0, color: '#1976d2', fontSize: '16px' }}>
           🧬 HPO Phenotype Ontology
         </h3>
-        <div style={{ fontSize: '12px', color: '#666' }}>
-          {selectedNodes.size} selected
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ fontSize: '12px', color: '#666' }}>
+            {selectedNodes.size} selected
+          </div>
+          {hasPersistedData && (
+            <div style={{ fontSize: '10px', color: '#4caf50' }}>
+              💾 Saved
+            </div>
+          )}
+          {selectedNodes.size > 0 && (
+            <button
+              onClick={clearAllSelections}
+              style={{
+                fontSize: '10px',
+                padding: '2px 6px',
+                backgroundColor: '#f44336',
+                color: 'white',
+                border: 'none',
+                borderRadius: '3px',
+                cursor: 'pointer'
+              }}
+              title="Clear all selections"
+            >
+              Clear
+            </button>
+          )}
         </div>
       </div>
 
@@ -572,7 +695,11 @@ const HPOPlugin: React.FC = () => {
               style={{
                 marginRight: '8px',
                 cursor: 'pointer',
-                accentColor: isNodeSelected(node.id) ? '#2196f3' : undefined
+                accentColor: isNodeSelected(node.id) 
+                  ? '#2196f3' 
+                  : isNodePartiallySelected(node.id) 
+                    ? '#90caf9'  // Faint blue for indeterminate state
+                    : undefined
               }}
             />
             
