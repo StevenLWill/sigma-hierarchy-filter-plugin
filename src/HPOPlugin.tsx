@@ -353,8 +353,15 @@ const HPOPlugin: React.FC = () => {
     });
   }, []);
 
-  // Optimized getDescendants with Set and logging
+  // Optimized getDescendants with early termination and caching
+  const descendantsCache = useRef<Map<string, string[]>>(new Map());
+  
   const getDescendants = useCallback((nodeId: string): string[] => {
+    // Check cache first
+    if (descendantsCache.current.has(nodeId)) {
+      return descendantsCache.current.get(nodeId)!;
+    }
+
     const descendants: string[] = [];
     const stack = [nodeId];
     const visited = new Set<string>();
@@ -364,6 +371,7 @@ const HPOPlugin: React.FC = () => {
       if (visited.has(currentId)) continue;
       visited.add(currentId);
       if (currentId !== nodeId) descendants.push(currentId);
+      
       const children = nodesByParent.get(currentId) || [];
       for (const child of children) {
         if (!visited.has(child.id)) {
@@ -371,58 +379,91 @@ const HPOPlugin: React.FC = () => {
         }
       }
     }
+    
+    // Cache the result
+    descendantsCache.current.set(nodeId, descendants);
     return descendants;
   }, [nodesByParent]);
+
+  // Clear cache when nodes change
+  useEffect(() => {
+    descendantsCache.current.clear();
+  }, [nodes]);
 
   // Check if node is selected
   const isNodeSelected = useCallback((nodeId: string): boolean => {
     return selectedNodes.has(nodeId);
   }, [selectedNodes]);
 
-  // Check if node is partially selected
+  // Check if node is partially selected (optimized)
   const isNodePartiallySelected = useCallback((nodeId: string): boolean => {
     const descendants = getDescendants(nodeId);
-    const selectedDescendants = descendants.filter(id => selectedNodes.has(id));
-    return selectedDescendants.length > 0 && selectedDescendants.length < descendants.length;
+    if (descendants.length === 0) return false;
+    
+    let selectedCount = 0;
+    for (const id of descendants) {
+      if (selectedNodes.has(id)) {
+        selectedCount++;
+      }
+    }
+    
+    // Only partial if some (but not all) descendants are selected
+    return selectedCount > 0 && selectedCount < descendants.length;
   }, [selectedNodes, getDescendants]);
 
   // Handle node selection with logging
   const handleNodeSelect = useCallback((node: HPONode, checked: boolean) => {
     const t0 = performance.now();
-    const descendants = getDescendants(node.id);
     const isPartiallySelected = isNodePartiallySelected(node.id);
     const isFullySelected = isNodeSelected(node.id);
     
-    console.log(`Toggling ${descendants.length} descendants for node ${node.id}, partially selected: ${isPartiallySelected}, fully selected: ${isFullySelected}`);
+    console.log(`Toggling node ${node.id}, partially selected: ${isPartiallySelected}, fully selected: ${isFullySelected}, checked: ${checked}`);
+    
+    // Always get descendants for proper parent-child relationship handling
+    const descendants = getDescendants(node.id);
+    console.log(`Processing ${descendants.length} descendants for node ${node.id}`);
+    
     const newSelected = new Set(selectedNodes);
 
-    // If the node is partially selected (indeterminate state), unselect everything
+    // Determine the action based on current state
+    let shouldSelect = false;
+    
     if (isPartiallySelected) {
-      descendants.forEach(id => newSelected.delete(id));
-      newSelected.delete(node.id);
-    } else if (checked) {
-      // Normal behavior: select node and all descendants
+      // If partially selected, unselect everything
+      shouldSelect = false;
+    } else if (isFullySelected) {
+      // If fully selected, unselect everything
+      shouldSelect = false;
+    } else {
+      // If not selected, select everything
+      shouldSelect = true;
+    }
+
+    // Apply the selection to the node and all its descendants
+    if (shouldSelect) {
       descendants.forEach(id => newSelected.add(id));
       newSelected.add(node.id);
     } else {
-      // Normal behavior: unselect node and all descendants
       descendants.forEach(id => newSelected.delete(id));
       newSelected.delete(node.id);
     }
 
     setSelectedNodes(newSelected);
 
-    // Update Sigma filter
+    // Update Sigma filter (defer this to avoid blocking)
     if (iframeLoaded) {
-      const selectedTerms = Array.from(newSelected)
-        .map(id => {
-          const node = nodes.find(n => n.id === id);
-          return node ? `${node.id} - ${node.name}` : null;
-        })
-        .filter((term): term is string => term !== null);
+      // Use setTimeout to defer the Sigma update
+      setTimeout(() => {
+        const selectedTerms = Array.from(newSelected)
+          .map(id => {
+            const node = nodes.find(n => n.id === id);
+            return node ? `${node.id} - ${node.name}` : null;
+          })
+          .filter((term): term is string => term !== null);
 
-      const valueToSet = selectedTerms.length > 0 ? selectedTerms.join(',') : '';
-      setVariables({ 'hpo-phenotype-filter': valueToSet });
+        const valueToSet = selectedTerms.length > 0 ? selectedTerms.join(',') : '';
+        setVariables({ 'hpo-phenotype-filter': valueToSet });
+      }, 0);
     }
     const t1 = performance.now();
     console.log(`handleNodeSelect for ${node.id} took ${(t1 - t0).toFixed(2)} ms`);
@@ -689,7 +730,14 @@ const HPOPlugin: React.FC = () => {
               type="checkbox"
               checked={isNodeSelected(node.id)}
               ref={input => {
-                if (input) input.indeterminate = isNodePartiallySelected(node.id);
+                if (input) {
+                  const isPartial = isNodePartiallySelected(node.id);
+                  input.indeterminate = isPartial;
+                  // Debug logging
+                  if (isPartial) {
+                    console.log(`Node ${node.id} is partially selected (indeterminate)`);
+                  }
+                }
               }}
               onChange={(e) => handleNodeSelect(node, e.target.checked)}
               style={{
